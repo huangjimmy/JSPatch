@@ -56,8 +56,8 @@ JPBOXING_GEN(boxWeakObj, weakObj, id)
 @implementation JPEngine
 
 static JSContext *_context;
-static NSString *_regexStr = @"\\.\\s*(\\w+)\\s*\\(";
-static NSString *_replaceStr = @".__c(\"$1\")(";
+//static NSString *_regexStr = @"\\.\\s*(\\w+)\\s*\\(";
+//static NSString *_replaceStr = @".__c(\"$1\")(";
 static NSRegularExpression* _regex;
 static NSObject *_nullObj;
 static NSObject *_nilObj;
@@ -211,10 +211,10 @@ static NSMutableDictionary *registeredStruct;
         return nil;
     }
     
-    if (!_regex) {
-        _regex = [NSRegularExpression regularExpressionWithPattern:_regexStr options:0 error:nil];
-    }
-    NSString *formatedScript = [NSString stringWithFormat:@"try{%@}catch(e){_OC_catch(e.message, e.stack)}", [_regex stringByReplacingMatchesInString:script options:0 range:NSMakeRange(0, script.length) withTemplate:_replaceStr]];
+//    if (!_regex) {
+//        _regex = [NSRegularExpression regularExpressionWithPattern:_regexStr options:0 error:nil];
+//    }
+    NSString *formatedScript = [NSString stringWithFormat:@"try{%@}catch(e){_OC_catch(e.message, e.stack)}", script];
     @try {
         if ([_context respondsToSelector:@selector(evaluateScript:withSourceURL:)]) {
             return [_context evaluateScript:formatedScript withSourceURL:resourceURL];
@@ -765,9 +765,9 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
     }
     [invocation setSelector:selector];
     
-    NSUInteger numberOfArguments = methodSignature.numberOfArguments;
+    NSUInteger numberOfArguments = MAX(methodSignature.numberOfArguments, [argumentsObj count]+2);
     for (NSUInteger i = 2; i < numberOfArguments; i++) {
-        const char *argumentType = [methodSignature getArgumentTypeAtIndex:i];
+        const char *argumentType = [methodSignature getArgumentTypeAtIndex:MIN(i, methodSignature.numberOfArguments-1)];
         id valObj = argumentsObj[i-2];
         switch (argumentType[0]) {
                 
