@@ -878,7 +878,7 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
                             id idObj = (__bridge id)(pointer);
                             [invocation setArgument:&idObj atIndex:i];
                         }
-                        if (obj) {
+                        else if (obj) {
                             [invocation setArgument:&obj atIndex:i];
                         }
                     }
