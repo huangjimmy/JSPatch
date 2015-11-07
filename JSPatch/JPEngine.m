@@ -63,7 +63,17 @@ static NSObject *_nullObj;
 static NSObject *_nilObj;
 static NSMutableDictionary *registeredStruct;
 
+
 #pragma mark - APIS
+
+static NSString *jsTypeOf(JSValue *value){
+    JSContext *context = value.context;
+    NSString *tmpVarName = [NSString stringWithFormat:@"__tmp__%d_%d", (int)[NSDate new].timeIntervalSince1970, rand()];
+    context[tmpVarName] = value;
+    JSValue *jstype = [value.context evaluateScript:[NSString stringWithFormat:@"typeof %@", tmpVarName]];
+    [value.context evaluateScript:[NSString stringWithFormat:@"delete %@", tmpVarName]];
+    return [jstype toString];
+}
 
 + (void)startEngine
 {
@@ -160,16 +170,84 @@ static NSMutableDictionary *registeredStruct;
     };
     
     context[@"_OC_catch"] = ^(JSValue *msg, JSValue *stack) {
-        NSAssert(NO, @"js exception, \nmsg: %@, \nstack: \n %@", [msg toObject], [stack toObject]);
+        NSLog( @"js exception, \nmsg: %@, \nstack: \n %@", [msg toObject], [stack toObject]);
+//        NSAssert(NO, @"js exception, \nmsg: %@, \nstack: \n %@", [msg toObject], [stack toObject]);
+    };
+    
+    context[@"__OS__"] = ([[NSBundle mainBundle] bundleIdentifier]);
+    context[@"__VERSION__"] = ([[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleVersion"]);
+    
+    context[@"NSObject"] = [NSObject class];
+    
+    context[@"__wrapperNSClassFromString"] = ^NSDictionary*(NSString *className){
+        return @{@"__class":NSClassFromString(className), @"__isclass":@YES};
+    };
+    
+    [context evaluateScript:@"function NSClassFromString(className){var classObj = __wrapperNSClassFromString(className); if (classObj.__isclass){return classObj.__class;}else return null;}"];
+    
+    context[@"NSStringFromClass"] = ^NSString*(JSValue *value){
+        if ([value.toString rangeOfString:@"function Object()"].location == 0) {
+            return @"NSObject";
+        }
+        return NSStringFromClass(value.toObject);
+    };
+    
+    context[@"__superclass"] = ^NSDictionary*(JSValue *value){
+        if ([value.toString rangeOfString:@"function Object()"].location == 0) {
+            return @{@"__class":[NSObject class], @"__isclass":@YES};
+        }
+        Class class = [value.toObject class];
+        Class superclass = [class superclass];
+        return @{@"__class":superclass, @"__isclass":@YES};
+    };
+    
+    [context evaluateScript:@"function classSuperClass(cls){var classObj = __superclass(cls); if (classObj.__isclass){return classObj.__class;}else return null;}"];
+    
+    context[@"__class"] = ^NSDictionary*(JSValue *value){
+        if ([value.toString rangeOfString:@"function Object()"].location == 0) {
+            return @{@"__class":[NSObject class], @"__isclass":@YES};
+        }
+        Class class = [value.toObject class];
+        return @{@"__class":class, @"__isclass":@YES};
+    };
+    
+    [context evaluateScript:@"function classClass(cls){var classObj = __class(cls); if (classObj.__isclass){return classObj.__class;}else return null;}"];
+    
+    context[@"NSLog"] = ^(JSValue *value){
+        NSString *typeofValue = jsTypeOf(value);
+        NSLog(@"console.log typeof %@ = %@", value, typeofValue);
+    };
+    
+    context[@"objc_isKindOfClass"] = ^BOOL(JSValue *obj, JSValue *cls){
+        
+        if ([cls.toString rangeOfString:@"function Object()"].location == 0) {
+            return [obj.toObject isKindOfClass:[NSObject class]];
+        }
+        
+        if (cls.isString) {
+            Class class = NSClassFromString(cls.toString);
+            return [obj.toObject isKindOfClass:class];
+        }
+        else{
+            Class class = cls.toObject;
+            
+            return [obj.toObject isKindOfClass:class];
+        }
+    };
+    
+    context[@"objc_isNSObject"] = ^BOOL(JSValue *obj){
+        return [obj.toObject isKindOfClass:[NSObject class]];
+        
     };
     
     context.exceptionHandler = ^(JSContext *con, JSValue *exception) {
         NSLog(@"%@", exception);
-        NSAssert(NO, @"js exception: %@", exception);
+//        NSAssert(NO, @"js exception: %@", exception);
     };
     
     _nullObj = [[NSObject alloc] init];
     context[@"_OC_null"] = formatOCToJS(_nullObj);
+    context[@"nil"] = _nilObj;
     
     _context = context;
     
@@ -216,11 +294,16 @@ static NSMutableDictionary *registeredStruct;
 //    }
     NSString *formatedScript = [NSString stringWithFormat:@"try{%@}catch(e){_OC_catch(e.message, e.stack)}", script];
     @try {
+        
+        _context[@"___JAVASCRIPT_SOURCE_URL"] = [resourceURL absoluteString];
+        JSValue *ret = nil;
         if ([_context respondsToSelector:@selector(evaluateScript:withSourceURL:)]) {
-            return [_context evaluateScript:formatedScript withSourceURL:resourceURL];
+            ret = [_context evaluateScript:formatedScript withSourceURL:resourceURL];
         } else {
-            return [_context evaluateScript:formatedScript];
+            ret = [_context evaluateScript:formatedScript];
         }
+        [_context evaluateScript:@"delete ___JAVASCRIPT_SOURCE_URL;"];
+        return ret;
     }
     @catch (NSException *exception) {
         NSAssert(NO, @"%@", exception);
@@ -263,9 +346,30 @@ static NSMutableDictionary *registeredStruct;
     [_JSMethodSignatureLock unlock];
 }
 
+/*!
+ *
+ *
+ *
+ */
++ (JSValue*)currentJSImplementationForClass:(Class)cls andSelector:(SEL)selector{
+    NSString *JPSelector = [NSString stringWithFormat:@"_JP%@", NSStringFromSelector(selector)];
+    return _JSOverrideMethods[cls][JPSelector][@"current"];
+}
+
+/*!
+ *
+ *
+ *
+ */
++ (NSDictionary*)availableJSImplementationForClass:(Class)cls andSelector:(SEL)selector{
+    NSString *JPSelector = [NSString stringWithFormat:@"_JP%@", NSStringFromSelector(selector)];
+    return _JSOverrideMethods[cls][JPSelector][@"available"];
+}
+
 #pragma mark - Implements
 
-static NSMutableDictionary *_JSOverideMethods;
+static NSMutableDictionary *_appliedJSPatch;//javascript filename -> class -> method
+static NSMutableDictionary *_JSOverrideMethods;//class -> method -> JSValue (JSValue is a function with a property of javascript filename)
 static NSMutableDictionary *_TMPMemoryPool;
 static NSRegularExpression *countArgRegex;
 static NSMutableDictionary *_propKeys;
@@ -393,14 +497,14 @@ static NSDictionary *defineClass(NSString *classDeclaration, JSValue *instanceMe
 static JSValue* getJSFunctionInObjectHierachy(id slf, NSString *selectorName)
 {
     Class cls = object_getClass(slf);
-    JSValue *func = _JSOverideMethods[cls][selectorName];
+    JSValue *func = _JSOverrideMethods[cls][selectorName][@"current"];
     while (!func) {
         cls = class_getSuperclass(cls);
         if (!cls) {
             NSCAssert(NO, @"warning can not find selector %@", selectorName);
             return nil;
         }
-        func = _JSOverideMethods[cls][selectorName];
+        func = _JSOverrideMethods[cls][selectorName][@"current"];
     }
     return func;
 }
@@ -637,12 +741,24 @@ static void JPForwardInvocation(id slf, SEL selector, NSInvocation *invocation)
     }
 }
 
-static void _initJPOverideMethods(Class cls) {
-    if (!_JSOverideMethods) {
-        _JSOverideMethods = [[NSMutableDictionary alloc] init];
+static void _initJPOverideMethods(Class cls, NSString *javascriptSourceFile) {
+    if (!_JSOverrideMethods) {
+        _JSOverrideMethods = [[NSMutableDictionary alloc] init];
     }
-    if (!_JSOverideMethods[cls]) {
-        _JSOverideMethods[(id<NSCopying>)cls] = [[NSMutableDictionary alloc] init];
+    if (!_JSOverrideMethods[cls]) {
+        _JSOverrideMethods[(id<NSCopying>)cls] = [[NSMutableDictionary alloc] init];
+    }
+    
+    if (!_appliedJSPatch) {
+        _appliedJSPatch = [[NSMutableDictionary alloc] init];
+    }
+    
+    if (!_appliedJSPatch[javascriptSourceFile]) {
+        _appliedJSPatch[javascriptSourceFile]  = [[NSMutableDictionary alloc] init];
+    }
+    
+    if (!_appliedJSPatch[javascriptSourceFile][cls]) {
+        _appliedJSPatch[javascriptSourceFile][(id<NSCopying>)cls] = [[NSMutableDictionary alloc] init];
     }
 }
 
@@ -691,8 +807,36 @@ static void overrideMethod(Class cls, NSString *selectorName, JSValue *function,
     NSString *JPSelectorName = [NSString stringWithFormat:@"_JP%@", selectorName];
     SEL JPSelector = NSSelectorFromString(JPSelectorName);
 
-    _initJPOverideMethods(cls);
-    _JSOverideMethods[cls][JPSelectorName] = function;
+    JSValue *javascriptSourceFileJS = [function.context evaluateScript:@"___JAVASCRIPT_SOURCE_URL"];
+    NSString *javascriptSourceFile = javascriptSourceFileJS.isString?[javascriptSourceFileJS toString]:@"main.js";
+    
+    if (javascriptSourceFile) {
+        [function setValue:javascriptSourceFile forProperty:@"___JAVASCRIPT_SOURCE_URL"];
+    }
+    
+    _initJPOverideMethods(cls, javascriptSourceFile);
+    //_JSOverrideMethods points to function that is the current implementation for the cls.JPSelectorName
+    if (_JSOverrideMethods[cls][JPSelectorName] == nil) {
+        _JSOverrideMethods[cls][JPSelectorName] = [[NSMutableDictionary alloc] init];
+    }
+    
+    if (_JSOverrideMethods[cls][JPSelectorName][@"available"] == nil) {
+        _JSOverrideMethods[cls][JPSelectorName][@"available"] = [[NSMutableDictionary alloc] init];
+    }
+    
+    if (_JSOverrideMethods[cls][JPSelectorName][@"current"] != nil) {
+        JSValue *oldFunction = _JSOverrideMethods[cls][JPSelectorName][@"current"];
+        JSValue *existingJavascriptSourceFileJS = [oldFunction valueForProperty:@"___JAVASCRIPT_SOURCE_URL"];
+        NSString *existingJavascriptSourceFile = existingJavascriptSourceFileJS.isString?[existingJavascriptSourceFileJS toString]:@"main.js";
+        _JSOverrideMethods[cls][JPSelectorName][@"available"][existingJavascriptSourceFile] = oldFunction;
+    }
+    
+    _JSOverrideMethods[cls][JPSelectorName][@"current"] = function;
+    _JSOverrideMethods[cls][JPSelectorName][@"available"][javascriptSourceFile] = function;
+    
+    //function has a property ___JAVASCRIPT_SOURCE_URL
+    //_appliedJSPatch points to all functions that can be implementation of cls.JPSelectorName
+    _appliedJSPatch[javascriptSourceFile][cls][JPSelectorName] = function;
     
     class_addMethod(cls, JPSelector, msgForwardIMP, typeDescription);
 }
@@ -703,13 +847,13 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
 {
     if (instance) {
         instance = formatJSToOC(instance);
-        if (!instance || instance == _nilObj) return @{@"__isNil": @(YES)};
+        if (!instance || instance == _nilObj) return _nilObj;
     }
     id argumentsObj = formatJSToOC(arguments);
     
     if (instance && [selectorName isEqualToString:@"toJS"]) {
         if ([instance isKindOfClass:[NSString class]] || [instance isKindOfClass:[NSDictionary class]] || [instance isKindOfClass:[NSArray class]]) {
-            return _unboxOCObjectToJS(instance);
+            return (instance);
         }
     }
 
@@ -727,7 +871,7 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
         class_addMethod(cls, superSelector, superIMP, method_getTypeEncoding(superMethod));
         
         NSString *JPSelectorName = [NSString stringWithFormat:@"_JP%@", selectorName];
-        JSValue *overideFunction = _JSOverideMethods[superCls][JPSelectorName];
+        JSValue *overideFunction = _JSOverrideMethods[superCls][JPSelectorName][@"current"];
         if (overideFunction) {
             overrideMethod(cls, superSelectorName, overideFunction, NO, NULL);
         }
@@ -754,6 +898,11 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
             _JSMethodSignatureCache[cls][selectorName] = methodSignature;
         }
         [_JSMethodSignatureLock unlock];
+        
+        if (!methodSignature) {
+            methodSignature = [instance methodSignatureForSelector:NSSelectorFromString(selectorName)];
+        }
+        
         NSCAssert(methodSignature, @"unrecognized selector %@ for instance %@", selectorName, instance);
         invocation = [NSInvocation invocationWithMethodSignature:methodSignature];
         [invocation setTarget:instance];
@@ -765,10 +914,10 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
     }
     [invocation setSelector:selector];
     
-    NSUInteger numberOfArguments = MAX(methodSignature.numberOfArguments, [argumentsObj count]+2);
+    NSUInteger numberOfArguments = MIN(methodSignature.numberOfArguments, [argumentsObj count]+2);
     for (NSUInteger i = 2; i < numberOfArguments; i++) {
         const char *argumentType = [methodSignature getArgumentTypeAtIndex:MIN(i, methodSignature.numberOfArguments-1)];
-        id valObj = argumentsObj[i-2];
+        id valObj = [arguments[i-2] toObject];
         switch (argumentType[0]) {
                 
                 #define JP_CALL_ARG_CASE(_typeString, _type, _selector) \
@@ -882,8 +1031,10 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
                             [invocation setArgument:&obj atIndex:i];
                         }
                     }
-                    else
+                    else{
+                        
                         [invocation setArgument:&valObj atIndex:i];
+                    }
                 }
             }
         }
@@ -1225,40 +1376,40 @@ static BOOL blockTypeIsObject(NSString *typeString)
 
 static id formatOCToJS(id obj)
 {
-    if ([obj isKindOfClass:[NSString class]] || [obj isKindOfClass:[NSDictionary class]] || [obj isKindOfClass:[NSArray class]]) {
-        return _wrapObj([JPBoxing boxObj:obj]);
-    }
-    if ([obj isKindOfClass:[NSNumber class]] || [obj isKindOfClass:NSClassFromString(@"NSBlock")] || [obj isKindOfClass:[JSValue class]]) {
-        return obj;
-    }
-    return _wrapObj(obj);
+//    if ([obj isKindOfClass:[NSString class]] || [obj isKindOfClass:[NSDictionary class]] || [obj isKindOfClass:[NSArray class]]) {
+//        return [JPBoxing boxObj:obj];
+//    }
+//    if ([obj isKindOfClass:[NSNumber class]] || [obj isKindOfClass:NSClassFromString(@"NSBlock")] || [obj isKindOfClass:[JSValue class]]) {
+//        return obj;
+//    }
+    return obj;
 }
 
 static id formatJSToOC(JSValue *jsval)
 {
     id obj = [jsval toObject];
-    if (!obj || [obj isKindOfClass:[NSNull class]]) return _nilObj;
-    
-    if ([obj isKindOfClass:[JPBoxing class]]) return [obj unbox];
-    if ([obj isKindOfClass:[NSArray class]]) {
-        NSMutableArray *newArr = [[NSMutableArray alloc] init];
-        for (int i = 0; i < [obj count]; i ++) {
-            [newArr addObject:formatJSToOC(jsval[i])];
-        }
-        return newArr;
-    }
-    if ([obj isKindOfClass:[NSDictionary class]]) {
-        if (obj[@"__obj"]) {
-            id ocObj = [obj objectForKey:@"__obj"];
-            if ([ocObj isKindOfClass:[JPBoxing class]]) return [ocObj unbox];
-            return ocObj;
-        }
-        NSMutableDictionary *newDict = [[NSMutableDictionary alloc] init];
-        for (NSString *key in [obj allKeys]) {
-            [newDict setObject:formatJSToOC(jsval[key]) forKey:key];
-        }
-        return newDict;
-    }
+//    if (!obj || [obj isKindOfClass:[NSNull class]]) return _nilObj;
+//    
+//    if ([obj isKindOfClass:[JPBoxing class]]) return [obj unbox];
+//    if ([obj isKindOfClass:[NSArray class]]) {
+//        NSMutableArray *newArr = [[NSMutableArray alloc] init];
+//        for (int i = 0; i < [obj count]; i ++) {
+//            [newArr addObject:formatJSToOC(jsval[i])];
+//        }
+//        return newArr;
+//    }
+//    if ([obj isKindOfClass:[NSDictionary class]]) {
+//        if (obj[@"__obj"]) {
+//            id ocObj = [obj objectForKey:@"__obj"];
+//            if ([ocObj isKindOfClass:[JPBoxing class]]) return [ocObj unbox];
+//            return ocObj;
+//        }
+//        NSMutableDictionary *newDict = [[NSMutableDictionary alloc] init];
+//        for (NSString *key in [obj allKeys]) {
+//            [newDict setObject:formatJSToOC(jsval[key]) forKey:key];
+//        }
+//        return newDict;
+//    }
     return obj;
 }
 
@@ -1271,35 +1422,36 @@ static id _formatOCToJSList(NSArray *list)
     return arr;
 }
 
-static NSDictionary *_wrapObj(id obj)
-{
-    if (!obj || obj == _nilObj) {
-        return @{@"__isNil": @(YES)};
-    }
-    return @{@"__obj": obj};
-}
+//static NSDictionary *_wrapObj(id obj)
+//{
+//    if (!obj || obj == _nilObj) {
+//        return @{@"__isNil": @(YES)};
+//    }
+//    return obj;
+//    return @{@"__obj": obj};
+//}
 
-static id _unboxOCObjectToJS(id obj)
-{
-    if ([obj isKindOfClass:[NSArray class]]) {
-        NSMutableArray *newArr = [[NSMutableArray alloc] init];
-        for (int i = 0; i < [obj count]; i ++) {
-            [newArr addObject:_unboxOCObjectToJS(obj[i])];
-        }
-        return newArr;
-    }
-    if ([obj isKindOfClass:[NSDictionary class]]) {
-        NSMutableDictionary *newDict = [[NSMutableDictionary alloc] init];
-        for (NSString *key in [obj allKeys]) {
-            [newDict setObject:_unboxOCObjectToJS(obj[key]) forKey:key];
-        }
-        return newDict;
-    }
-    if ([obj isKindOfClass:[NSString class]] ||[obj isKindOfClass:[NSNumber class]] || [obj isKindOfClass:NSClassFromString(@"NSBlock")]) {
-        return obj;
-    }
-    return _wrapObj(obj);
-}
+//static id _unboxOCObjectToJS(id obj)
+//{
+//    if ([obj isKindOfClass:[NSArray class]]) {
+//        NSMutableArray *newArr = [[NSMutableArray alloc] init];
+//        for (int i = 0; i < [obj count]; i ++) {
+//            [newArr addObject:_unboxOCObjectToJS(obj[i])];
+//        }
+//        return newArr;
+//    }
+//    if ([obj isKindOfClass:[NSDictionary class]]) {
+//        NSMutableDictionary *newDict = [[NSMutableDictionary alloc] init];
+//        for (NSString *key in [obj allKeys]) {
+//            [newDict setObject:_unboxOCObjectToJS(obj[key]) forKey:key];
+//        }
+//        return newDict;
+//    }
+//    if ([obj isKindOfClass:[NSString class]] ||[obj isKindOfClass:[NSNumber class]] || [obj isKindOfClass:NSClassFromString(@"NSBlock")]) {
+//        return obj;
+//    }
+//    return _wrapObj(obj);
+//}
 @end
 
 

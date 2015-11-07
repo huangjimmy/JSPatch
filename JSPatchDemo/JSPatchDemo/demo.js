@@ -36,10 +36,12 @@ defineClass('JPTableViewController : UITableViewController <UIAlertViewDelegate>
   },
   "tableView:didSelectRowAtIndexPath:": function(tableView, indexPath) {
     //js中，只能支持一个button的alertview，因为js中不支持var args的Objc API的调用
-     var alertView = require('UIAlertView').$("alloc").$("initWithTitle:message:delegate:cancelButtonTitle:otherButtonTitles:","Alert",self.$("dataSource").$("objectAtIndex:", indexPath.$("row")), self, "OK", null);
+     var alertView = require('UIAlertView').$("alloc").$("initWithTitle:message:delegate:cancelButtonTitle:otherButtonTitles:","Alert",self.$("dataSource").$("objectAtIndex:", indexPath.$("row")), self, "Cancel", nil);
+            alertView.$("addButtonWithTitle:","YES");
+            alertView.$("addButtonWithTitle:","NO");
      alertView.$("show")
   },
   "alertView:willDismissWithButtonIndex:": function(alertView, idx) {
-    console.log('click btn ' + alertView.$("buttonTitleAtIndex:",idx).$("toJS"))
+    console.log('click btn ' + alertView.$("buttonTitleAtIndex:",idx))
   }
 })

@@ -35,6 +35,8 @@
  */
 + (JSValue *)evaluateScript:(NSString *)script;
 
++ (JSValue *)evaluateScript:(NSString *)script withSourceURL:(NSURL *)resourceURL;
+
 /*!
  @method
  @description Return the JSPatch JavaScript execution environment.
@@ -68,6 +70,21 @@
               the key of dictionary is the struct name.
  */
 + (NSMutableDictionary *)registeredStruct;
+
+/*!
+ *
+ *
+ *
+ */
++ (JSValue*)currentJSImplementationForClass:(Class)cls andSelector:(SEL)selector;
+
+/*!
+ *
+ *
+ *
+ */
++ (NSDictionary*)availableJSImplementationForClass:(Class)cls andSelector:(SEL)selector;
+
 @end
 
 

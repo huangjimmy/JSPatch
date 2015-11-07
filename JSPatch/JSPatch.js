@@ -41,11 +41,11 @@ var global = this
       }
     }
     if (obj instanceof Object) {
-      var ret = {}
-      for (var key in obj) {
-        ret[key] = _formatOCToJS(obj[key])
-      }
-      return ret
+//      var ret = {}
+//      for (var key in obj) {
+//        ret[key] = _formatOCToJS(obj[key])
+//      }
+//      return ret
     }
     return obj
   }
@@ -66,35 +66,6 @@ var global = this
     return _formatOCToJS(ret)
   }
 
-  Object.defineProperty(Object.prototype, "__c", {value: function(methodName) {
-    if (this instanceof Boolean) {
-      return function() {
-        return false
-      }
-    }
-    
-    if (!this.__obj && !this.__clsName) {
-      return this[methodName].bind(this);
-    }
-
-    var self = this
-    if (methodName == 'super') {
-      return function() {
-        return {__obj: self.__obj, __clsName: self.__clsName, __isSuper: 1}
-      }
-    }
-
-    if (methodName == 'performSelector') {
-      return function(){
-        var args = Array.prototype.slice.call(arguments)
-        return _methodFunc(self.__obj, self.__clsName, args[0], args.splice(1), self.__isSuper, true)
-      }
-    }
-    return function(){
-      var args = Array.prototype.slice.call(arguments)
-      return _methodFunc(self.__obj, self.__clsName, methodName, args, self.__isSuper)
-    }
-  }, configurable:false, enumerable: false})
   
   Object.defineProperty(Object.prototype, "$", {value: function(methodName) {
                         if (this instanceof Boolean) {
@@ -103,7 +74,7 @@ var global = this
                         }
                         }
                         
-                        if (!this.__obj && !this.__clsName) {
+                        if(!objc_isKindOfClass(this, NSObject)){
                         return this[methodName].bind(this);
                         }
                         
@@ -123,16 +94,14 @@ var global = this
                         
                         var args = Array.prototype.slice.call(arguments).splice(1);
                         return (function(){
-                        return _methodFunc(self.__obj, self.__clsName, methodName, args, self.__isSuper)
+                        return _methodFunc(self, classClass(self), methodName, args, self.__isSuper)
                                 }).apply(this);
                         }, configurable:false, enumerable: false})
 
   var _require = function(clsName) {
     if (!global[clsName]) {
-      global[clsName] = {
-        __clsName: clsName
-      }
-    } 
+        global[clsName] = NSClassFromString(clsName);
+    }
     return global[clsName]
   }
 
