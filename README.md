@@ -1,3 +1,18 @@
+# JSPatchAlternative
+
+JSPatchAlternative is a fork of JSPatch but with a different JavaScript approach. 
+In JSPatch, you write
+```js
+ UIView.alloc().init()
+ ```
+ While in JSPatchAlternative, you write 
+ ```js
+ UIView.$("alloc").$("init")
+ UIView.$("alloc").$("initWithFrame:",  frame)
+```
+
+This change is made because I need to use underscore in my project. Also I need to support selectors like this @selector(testMethod::).
+
 # JSPatch
 [![Travis](https://img.shields.io/travis/bang590/JSPatch.svg)](https://github.com/bang590/JSPatch)
 ![CocoaPods Version](https://img.shields.io/cocoapods/v/JSPatch.svg?style=flat)
@@ -39,13 +54,13 @@ JSPatch is still in development, welcome to improve the project together.
 require('UIView, UIColor, UILabel')
 defineClass('AppDelegate', {
   // replace the -genView method
-  genView: function() {
-    var view = self.ORIGgenView();
-    view.setBackgroundColor(UIColor.greenColor())
-    var label = UILabel.alloc().initWithFrame(view.frame());
-    label.setText("JSPatch");
-    label.setTextAlignment(1);
-    view.addSubview(label);
+  "genView": function() {
+    var view = self.$("ORIGgenView");
+    view.$("setBackgroundColor:", UIColor.$("greenColor"))
+    var label = UILabel$("alloc").$("initWithFrame:", view.$("frame"));
+    label.$("setText:", "JSPatch");
+    label.$("setTextAlignment:", 1);
+    view.$("addSubview:", label);
     return view;
   }
 });
