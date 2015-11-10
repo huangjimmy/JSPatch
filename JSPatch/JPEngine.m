@@ -180,7 +180,11 @@ static NSString *jsTypeOf(JSValue *value){
     context[@"NSObject"] = [NSObject class];
     
     context[@"__wrapperNSClassFromString"] = ^NSDictionary*(NSString *className){
-        return @{@"__class":NSClassFromString(className), @"__isclass":@YES};
+        Class cls = NSClassFromString(className);
+        if (!cls) {
+            return nil;
+        }
+        return @{@"__class":cls, @"__isclass":@YES};
     };
     
     [context evaluateScript:@"function NSClassFromString(className){var classObj = __wrapperNSClassFromString(className); if (classObj.__isclass){return classObj.__class;}else return null;}"];
@@ -233,6 +237,7 @@ static NSString *jsTypeOf(JSValue *value){
             
             return [obj.toObject isKindOfClass:class];
         }
+        
     };
     
     context[@"objc_isNSObject"] = ^BOOL(JSValue *obj){
@@ -912,9 +917,61 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
         invocation= [NSInvocation invocationWithMethodSignature:methodSignature];
         [invocation setTarget:cls];
     }
+    
     [invocation setSelector:selector];
     
     NSUInteger numberOfArguments = MIN(methodSignature.numberOfArguments, [argumentsObj count]+2);
+    
+    if (numberOfArguments < [argumentsObj count]+2) {
+        
+        //variadic arguments
+        switch ([argumentsObj count]) {
+            case 2:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject]);
+                break;
+            case 3:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject]);
+                break;
+            case 4:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject]);
+                break;
+            case 5:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject]);
+                break;
+            case 6:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject]);
+                break;
+            case 7:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject]);
+                break;
+            case 8:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject]);
+                break;
+            case 9:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject], [arguments[8] toObject]);
+                break;
+            case 10:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject], [arguments[8] toObject], [arguments[9] toObject]);
+                break;
+            case 11:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject], [arguments[8] toObject], [arguments[9] toObject], [arguments[10] toObject]);
+                break;
+            case 12:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject], [arguments[8] toObject], [arguments[9] toObject], [arguments[10] toObject], [arguments[11] toObject]);
+            case 13:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject], [arguments[8] toObject], [arguments[9] toObject], [arguments[10] toObject], [arguments[11] toObject], [arguments[12] toObject]);
+            case 14:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject], [arguments[8] toObject], [arguments[9] toObject], [arguments[10] toObject], [arguments[11] toObject], [arguments[12] toObject], [arguments[13] toObject]);
+            case 15:
+                return ((id(*)(id, SEL, id, ...))objc_msgSend)(instance, selector, [arguments[0] toObject], [arguments[1] toObject], [arguments[2] toObject], [arguments[3] toObject], [arguments[4] toObject], [arguments[5] toObject], [arguments[6] toObject], [arguments[7] toObject], [arguments[8] toObject], [arguments[9] toObject], [arguments[10] toObject], [arguments[11] toObject], [arguments[12] toObject], [arguments[13] toObject], [arguments[14] toObject]);
+            
+                break;
+            default:
+                break;
+        }
+        
+    }
+    
     for (NSUInteger i = 2; i < numberOfArguments; i++) {
         const char *argumentType = [methodSignature getArgumentTypeAtIndex:MIN(i, methodSignature.numberOfArguments-1)];
         id valObj = [arguments[i-2] toObject];
