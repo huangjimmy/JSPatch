@@ -452,9 +452,10 @@ static NSDictionary *defineClass(NSString *classDeclaration, JSValue *instanceMe
         for (NSString *jsMethodName in methodDict.allKeys) {
             JSValue *jsMethodArr = [jsMethods valueForProperty:jsMethodName];
             int numberOfArg = [jsMethodArr[0] toInt32];
-            NSString *tmpJSMethodName = [jsMethodName stringByReplacingOccurrencesOfString:@"__" withString:@"-"];
-            NSString *selectorName = [tmpJSMethodName stringByReplacingOccurrencesOfString:@"_" withString:@":"];
-            selectorName = [selectorName stringByReplacingOccurrencesOfString:@"-" withString:@"_"];
+//            NSString *tmpJSMethodName = [jsMethodName stringByReplacingOccurrencesOfString:@"__" withString:@"-"];
+//            NSString *selectorName = [tmpJSMethodName stringByReplacingOccurrencesOfString:@"_" withString:@":"];
+//            selectorName = [selectorName stringByReplacingOccurrencesOfString:@"-" withString:@"_"];
+            NSString *selectorName = jsMethodName;
             
             if (!countArgRegex) {
                 countArgRegex = [NSRegularExpression regularExpressionWithPattern:@":" options:NSRegularExpressionCaseInsensitive error:nil];
@@ -541,7 +542,7 @@ static void JPForwardInvocation(id slf, SEL selector, NSInvocation *invocation)
     
     NSMutableArray *argList = [[NSMutableArray alloc] init];
     if ([slf class] == slf) {
-        [argList addObject:[JSValue valueWithObject:@{@"__clsName": NSStringFromClass([slf class])} inContext:_context]];
+        [argList addObject:[slf class]];
     } else {
         [argList addObject:slf];
     }
@@ -767,12 +768,24 @@ static void _initJPOverideMethods(Class cls, NSString *javascriptSourceFile) {
     }
 }
 
+static void overrideClassMethod(Class cls, NSString *selectorName, JSValue *function, const char *typeDescription){
+    Class metaCls = objc_getMetaClass(NSStringFromClass(cls).UTF8String);
+    overrideMethod(metaCls, selectorName, function, NO, typeDescription);
+}
+
 static void overrideMethod(Class cls, NSString *selectorName, JSValue *function, BOOL isClassMethod, const char *typeDescription)
 {
+    
+    if (isClassMethod) {
+        overrideClassMethod(cls, selectorName, function, typeDescription);
+        return;
+    }
+    
     SEL selector = NSSelectorFromString(selectorName);
     
     if (!typeDescription) {
-        Method method = class_getInstanceMethod(cls, selector);
+        
+        Method method = isClassMethod?class_getClassMethod(cls, selector):class_getInstanceMethod(cls, selector);
         typeDescription = (char *)method_getTypeEncoding(method);
     }
     
@@ -970,6 +983,35 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
                 break;
         }
         
+    }
+    
+    //special case for view(Will|Did)(Appear|Disappear)
+    //If you use new relic, new relic will swizzle view(Did|Will)(Load|Appear|Disappear) to track user interaction
+    //We must call new relic implementaiton with original selectors, otherwise new relic will complain
+    //"New Relic detected an unrecognized selector"
+    //this could be also the case for other similar libraries
+    if ([selectorName hasPrefix:@"ORIGview"]) {
+        IMP viewMethodImp = class_getMethodImplementation([instance class], selector);
+        if ([selectorName isEqualToString:@"ORIGviewDidLoad"]) {
+            (((void(*)(id, SEL))viewMethodImp))(instance, @selector(viewDidLoad));
+            return nil;
+        }
+        else if ([selectorName isEqualToString:@"ORIGviewWillAppear:"]){
+            (((void(*)(id, SEL, BOOL))viewMethodImp))(instance, @selector(viewWillAppear:), [arguments[0] toBool]);
+            return nil;
+        }
+        else if ([selectorName isEqualToString:@"ORIGviewWillDisppear:"]){
+            (((void(*)(id, SEL, BOOL))viewMethodImp))(instance, @selector(viewWillDisappear:), [arguments[0] toBool]);
+            return nil;
+        }
+        else if ([selectorName isEqualToString:@"ORIGviewDidAppear:"]){
+            (((void(*)(id, SEL, BOOL))viewMethodImp))(instance, @selector(viewDidAppear:), [arguments[0] toBool]);
+            return nil;
+        }
+        else if ([selectorName isEqualToString:@"ORIGviewDidDisappear:"]){
+            (((void(*)(id, SEL, BOOL))viewMethodImp))(instance, @selector(viewDidDisappear:), [arguments[0] toBool]);
+            return nil;
+        }
     }
     
     for (NSUInteger i = 2; i < numberOfArguments; i++) {
