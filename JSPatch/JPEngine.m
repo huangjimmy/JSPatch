@@ -768,24 +768,14 @@ static void _initJPOverideMethods(Class cls, NSString *javascriptSourceFile) {
     }
 }
 
-static void overrideClassMethod(Class cls, NSString *selectorName, JSValue *function, const char *typeDescription){
-    Class metaCls = objc_getMetaClass(NSStringFromClass(cls).UTF8String);
-    overrideMethod(metaCls, selectorName, function, NO, typeDescription);
-}
-
 static void overrideMethod(Class cls, NSString *selectorName, JSValue *function, BOOL isClassMethod, const char *typeDescription)
 {
-    
-    if (isClassMethod) {
-        overrideClassMethod(cls, selectorName, function, typeDescription);
-        return;
-    }
     
     SEL selector = NSSelectorFromString(selectorName);
     
     if (!typeDescription) {
         
-        Method method = isClassMethod?class_getClassMethod(cls, selector):class_getInstanceMethod(cls, selector);
+        Method method = class_getInstanceMethod(cls, selector);
         typeDescription = (char *)method_getTypeEncoding(method);
     }
     
