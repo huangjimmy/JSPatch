@@ -56,15 +56,32 @@ JPBOXING_GEN(boxWeakObj, weakObj, id)
 @implementation JPEngine
 
 static JSContext *_context;
-//static NSString *_regexStr = @"\\.\\s*(\\w+)\\s*\\(";
-//static NSString *_replaceStr = @".__c(\"$1\")(";
 static NSRegularExpression* _regex;
 static NSObject *_nullObj;
 static NSObject *_nilObj;
 static NSMutableDictionary *registeredStruct;
+static JSValue *lastException;
+static NSArray *lastExceptionCallStack;
 
+static void(^JSExceptionHandler)(JSContext *context, JSValue *exception, NSArray *callStack, NSString *sourceURL);
+
+#define JSPATCH_THREAD_CALLSTACK_KEY @"JSPatchAlternativeJavaScriptCallStackArrayDictionaryKey"
 
 #pragma mark - APIS
+
+
++ (JSValue*)lastException{
+    return lastException;
+}
+
++ (NSArray*)lastExceptionCallStack{
+    return lastExceptionCallStack;
+}
+
++ (void)resetLastException{
+    lastException = nil;
+    lastExceptionCallStack = nil;
+}
 
 static NSString *jsTypeOf(JSValue *value){
     JSContext *context = value.context;
@@ -88,7 +105,17 @@ static NSString *jsTypeOf(JSValue *value){
     };
     
     context[@"_OC_callI"] = ^id(JSValue *obj, NSString *selectorName, JSValue *arguments, BOOL isSuper) {
-        return callSelector(nil, selectorName, arguments, obj, isSuper);
+        NSThread *currentThread = [NSThread currentThread];
+        NSMutableDictionary *callStackDict = currentThread.threadDictionary;
+        NSMutableArray *jsCallStack = callStackDict[JSPATCH_THREAD_CALLSTACK_KEY];
+        if (jsCallStack == nil) {
+            jsCallStack = [[NSMutableArray alloc] init];
+            callStackDict[JSPATCH_THREAD_CALLSTACK_KEY] = jsCallStack;
+        }
+        [jsCallStack addObject:@{@"self":obj, @"selector":selectorName, @"arguments":arguments, @"isSuper":@(isSuper)}];
+        id ret = callSelector(nil, selectorName, arguments, obj, isSuper);
+        [jsCallStack removeLastObject];
+        return ret;
     };
     context[@"_OC_callC"] = ^id(NSString *className, NSString *selectorName, JSValue *arguments) {
         return callSelector(className, selectorName, arguments, nil, NO);
@@ -247,6 +274,34 @@ static NSString *jsTypeOf(JSValue *value){
     
     context.exceptionHandler = ^(JSContext *con, JSValue *exception) {
         NSLog(@"%@", exception);
+        
+        NSString *jsSourceURL;
+        NSArray *callStack;
+        
+        NSThread *currentThread = [NSThread currentThread];
+        NSMutableDictionary *callStackDict = currentThread.threadDictionary;
+        NSMutableArray *jsCallStack = callStackDict[JSPATCH_THREAD_CALLSTACK_KEY];
+        for (NSInteger i = ((NSInteger)jsCallStack.count)-1; i >= 0; i--) {
+            NSDictionary *callInfo = [jsCallStack objectAtIndex:i];
+            JSValue *fun = callInfo[@"jsfun"];
+            if (fun) {
+                jsSourceURL = [[fun valueForProperty:@"___JAVASCRIPT_SOURCE_URL"] toString];
+                NSLog(@"exception occured in %@", jsSourceURL);
+                break;
+            }
+        }
+        
+        callStack = jsCallStack.copy;
+        [exception setValue:jsSourceURL forProperty:@"sourceURL"];
+        
+        lastException = exception;
+        lastExceptionCallStack = callStack;
+        //clear call stack if exception occurs
+        [jsCallStack removeAllObjects];
+
+        if (JSExceptionHandler) {
+            JSExceptionHandler(con, exception, callStack, jsSourceURL);
+        }
 //        NSAssert(NO, @"js exception: %@", exception);
     };
     
@@ -316,6 +371,37 @@ static NSString *jsTypeOf(JSValue *value){
     return nil;
 }
 
++ (void)undoEvaluateScriptWithSourceURL:(NSURL *)resourceURL{
+    [self undoEvaluateScriptWithSourceURLString:resourceURL.absoluteString];
+}
+
++ (void)undoEvaluateScriptWithSourceURLString:(NSString *)resourceURLString{
+    @synchronized(_JSOverrideMethods) {
+        
+        NSDictionary *overrided = _appliedJSPatch[resourceURLString];
+        [_appliedJSPatch removeObjectForKey:resourceURLString];
+        for (Class cls in overrided.allKeys) {
+            NSDictionary *jpSelectors = overrided[cls];
+            
+            for (NSString *jpSelector in jpSelectors.allKeys) {
+                JSValue *fun = _JSOverrideMethods[cls][jpSelector][@"current"];
+                JSValue *funToUndo = jpSelectors[jpSelector];
+                if (fun == funToUndo) {
+                    [_JSOverrideMethods[cls][jpSelector] removeObjectForKey:jpSelector];
+                    NSString *nativeSelector = [jpSelector substringFromIndex:3];
+                    NSString *ORIG_selector = [NSString stringWithFormat:@"ORIG%@", nativeSelector];
+                    SEL nativeSel = NSSelectorFromString(nativeSelector);
+                    SEL ORIGSel = NSSelectorFromString(ORIG_selector);
+                    
+                    IMP ORIGImpl = class_getMethodImplementation(cls, ORIGSel);
+                    method_setImplementation(class_getInstanceMethod(cls, nativeSel), ORIGImpl);
+                    
+                }
+            }
+        }
+    }
+}
+
 + (JSContext *)context
 {
     return _context;
@@ -371,6 +457,12 @@ static NSString *jsTypeOf(JSValue *value){
     return _JSOverrideMethods[cls][JPSelector][@"available"];
 }
 
+
++ (id)setJSExceptionHanlder:(void(^)(JSContext *context, JSValue *exception, NSArray *callStack, NSString *sourceURL))exceptionHandler{
+    id oldExceptionHandler = JSExceptionHandler;
+    JSExceptionHandler = exceptionHandler;
+    return oldExceptionHandler;
+}
 #pragma mark - Implements
 
 static NSMutableDictionary *_appliedJSPatch;//javascript filename -> class -> method
@@ -640,9 +732,17 @@ static void JPForwardInvocation(id slf, SEL selector, NSInvocation *invocation)
         }
     }
     
+    NSThread *currentThread = [NSThread currentThread];
+    NSMutableDictionary *callStackDict = currentThread.threadDictionary;
+    NSMutableArray *jsCallStack = callStackDict[JSPATCH_THREAD_CALLSTACK_KEY];
+    
+    JSValue *fun = getJSFunctionInObjectHierachy(slf, JPSelectorName);
+    
+    [jsCallStack addObject:@{@"self":invocation.target, @"selector":selectorName, @"jpselector":JPSelectorName, @"jsfun":fun, @"arguments":argList, @"isSuper":@(NO)}];
+    
     NSArray *params = _formatOCToJSList(argList);
     const char *returnType = [methodSignature methodReturnType];
-
+    
     switch (returnType[0]) {
         #define JP_FWD_RET_CALL_JS \
             JSValue *fun = getJSFunctionInObjectHierachy(slf, JPSelectorName); \
@@ -745,6 +845,8 @@ static void JPForwardInvocation(id slf, SEL selector, NSInvocation *invocation)
             break;
         }
     }
+    
+    [jsCallStack removeLastObject];
 }
 
 static void _initJPOverideMethods(Class cls, NSString *javascriptSourceFile) {
@@ -766,6 +868,10 @@ static void _initJPOverideMethods(Class cls, NSString *javascriptSourceFile) {
     if (!_appliedJSPatch[javascriptSourceFile][cls]) {
         _appliedJSPatch[javascriptSourceFile][(id<NSCopying>)cls] = [[NSMutableDictionary alloc] init];
     }
+}
+
+static void undoOverrideMethod(Class cls, NSString *selectorName, JSValue *function, BOOL isClassMethod, const char *typeDescription){
+    
 }
 
 static void overrideMethod(Class cls, NSString *selectorName, JSValue *function, BOOL isClassMethod, const char *typeDescription)
@@ -911,12 +1017,46 @@ static id callSelector(NSString *className, NSString *selectorName, JSValue *arg
             methodSignature = [instance methodSignatureForSelector:NSSelectorFromString(selectorName)];
         }
         
-        NSCAssert(methodSignature, @"unrecognized selector %@ for instance %@", selectorName, instance);
+//        NSCAssert(methodSignature, @"unrecognized selector %@ for instance %@", selectorName, instance);
+        if (methodSignature == nil) {
+            //TODO: exception here;
+            NSThread *currentThread = [NSThread currentThread];
+            NSMutableDictionary *callStackDict = currentThread.threadDictionary;
+            NSMutableArray *jsCallStack = callStackDict[JSPATCH_THREAD_CALLSTACK_KEY];
+            for (NSInteger i = ((NSInteger)jsCallStack.count)-1; i >= 0; i--) {
+                NSDictionary *callInfo = [jsCallStack objectAtIndex:i];
+                JSValue *fun = callInfo[@"jsfun"];
+                if (fun) {
+                    NSString *jsSourceURL = [[fun valueForProperty:@"___JAVASCRIPT_SOURCE_URL"] toString];
+                    NSLog(@"%@ cause crash!!!!", jsSourceURL);
+                    [fun.context evaluateScript:[NSString stringWithFormat:@"throw new Error(\"doesNotRecognizeSelector %@\")", selectorName]];
+                    break;
+                }
+            }
+            return nil;
+        }
         invocation = [NSInvocation invocationWithMethodSignature:methodSignature];
         [invocation setTarget:instance];
     } else {
         methodSignature = [cls methodSignatureForSelector:selector];
-        NSCAssert(methodSignature, @"unrecognized selector %@ for class %@", selectorName, className);
+        if (methodSignature == nil) {
+            //TODO: exception here;
+            NSThread *currentThread = [NSThread currentThread];
+            NSMutableDictionary *callStackDict = currentThread.threadDictionary;
+            NSMutableArray *jsCallStack = callStackDict[JSPATCH_THREAD_CALLSTACK_KEY];
+            for (NSInteger i = ((NSInteger)jsCallStack.count)-1; i >= 0; i--) {
+                NSDictionary *callInfo = [jsCallStack objectAtIndex:i];
+                JSValue *fun = callInfo[@"jsfun"];
+                if (fun) {
+                    NSString *jsSourceURL = [[fun valueForProperty:@"___JAVASCRIPT_SOURCE_URL"] toString];
+                    NSLog(@"%@ cause crash!!!!", jsSourceURL);
+                    [fun.context evaluateScript:[NSString stringWithFormat:@"throw new Error(\"doesNotRecognizeSelector %@\")", selectorName]];
+                    break;
+                }
+            }
+            return nil;
+        }
+//        NSCAssert(methodSignature, @"unrecognized selector %@ for class %@", selectorName, className);
         invocation= [NSInvocation invocationWithMethodSignature:methodSignature];
         [invocation setTarget:cls];
     }

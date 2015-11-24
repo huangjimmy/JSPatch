@@ -37,6 +37,9 @@
 
 + (JSValue *)evaluateScript:(NSString *)script withSourceURL:(NSURL *)resourceURL;
 
++ (void)undoEvaluateScriptWithSourceURL:(NSURL *)resourceURL;
++ (void)undoEvaluateScriptWithSourceURLString:(NSString *)resourceURLString;
+
 /*!
  @method
  @description Return the JSPatch JavaScript execution environment.
@@ -84,6 +87,20 @@
  *
  */
 + (NSDictionary*)availableJSImplementationForClass:(Class)cls andSelector:(SEL)selector;
+
++ (JSValue*)lastException;
+
++ (NSArray*)lastExceptionCallStack;
+
++ (void)resetLastException;
+
+/**
+ *
+ *
+ *
+ * @return the old exception handler block
+ */
++ (id)setJSExceptionHanlder:(void(^)(JSContext *context, JSValue *exception, NSArray *callStack, NSString *sourceURL))exceptionHandler;
 
 @end
 
